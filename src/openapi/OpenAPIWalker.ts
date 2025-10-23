@@ -38,6 +38,9 @@ export class OpenAPIWalker {
         }
         for (const path in paths) {
             const pathItem: OpenAPIV3.PathItemObject = paths[path] as OpenAPIV3.PathItemObject;
+            // Extract path-level parameters
+            const pathLevelParameters = pathItem.parameters || [];
+            
             let method: string;
             let operation: any;
             for ([method, operation] of Object.entries(pathItem)) {
@@ -48,6 +51,36 @@ export class OpenAPIWalker {
                     operation.tags = ['default']
                 }
                 if (operation && visitor.visitOperation) {
+                    // Merge path-level parameters with operation-level parameters
+                    // Operation-level parameters override path-level ones with the same name
+                    if (pathLevelParameters.length > 0) {
+                        const operationParameters = operation.parameters || [];
+                        
+                        // Create a map of operation parameter names for quick lookup
+                        const operationParamNames = new Set(
+                            operationParameters.map((p: any) => {
+                                // Handle both ReferenceObject and ParameterObject
+                                if ('$ref' in p) {
+                                    return null; // Will be resolved later
+                                }
+                                return p.name;
+                            }).filter(Boolean)
+                        );
+                        
+                        // Add path-level parameters that are not overridden by operation-level ones
+                        const mergedParameters = [
+                            ...pathLevelParameters.filter((p) => {
+                                if ('$ref' in p) {
+                                    return true; // Include references, they'll be resolved later
+                                }
+                                return !operationParamNames.has(p.name);
+                            }),
+                            ...operationParameters
+                        ];
+                        
+                        operation.parameters = mergedParameters;
+                    }
+                    
                     const context = {pattern: path, path: pathItem, method: method as OpenAPIV3.HttpMethods};
                     visitor.visitOperation(operation, context);
                 }

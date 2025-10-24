@@ -115,7 +115,44 @@ export class BaseOperationsCollector implements OpenAPIVisitor {
             }
             fields.push(notice)
         }
-        return fields;
+        return this.separateOptionalFields(fields);
+    }
+
+    /**
+     * Separate required and optional fields, grouping optional ones under "Additional Fields"
+     */
+    private separateOptionalFields(fields: INodeProperties[]): INodeProperties[] {
+        const requiredFields: INodeProperties[] = [];
+        const optionalFields: INodeProperties[] = [];
+
+        for (const field of fields) {
+            // Keep notice fields at the top level
+            if (field.type === 'notice') {
+                requiredFields.push(field);
+            } else if (field.required === true) {
+                requiredFields.push(field);
+            } else {
+                // Make sure required property is removed for optional fields
+                const optionalField = { ...field };
+                delete optionalField.required;
+                optionalFields.push(optionalField);
+            }
+        }
+
+        // If there are optional fields, wrap them in an "Additional Fields" collection
+        if (optionalFields.length > 0) {
+            const additionalFieldsCollection: INodeProperties = {
+                displayName: 'Additional Fields',
+                name: 'additionalFields',
+                type: 'collection',
+                placeholder: 'Add Field',
+                default: {},
+                options: optionalFields,
+            };
+            return [...requiredFields, additionalFieldsCollection];
+        }
+
+        return requiredFields;
     }
 
     private addDisplayOption(fields: INodeProperties[], resource: string, operation: string) {

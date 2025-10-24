@@ -5,7 +5,7 @@ import * as lodash from "lodash";
 import { SchemaExample } from "../openapi/SchemaExample";
 
 type Schema = OpenAPIV3.ReferenceObject | OpenAPIV3.SchemaObject;
-type FromSchemaNodeProperty = Pick<INodeProperties, 'type' | 'default' | 'description' | 'options'>;
+type FromSchemaNodeProperty = Pick<INodeProperties, 'type' | 'description' | 'options' | 'default'>
 
 function combine(...sources: Partial<INodeProperties>[]): INodeProperties {
     const obj = lodash.defaults({}, ...sources)
@@ -52,33 +52,40 @@ export class N8NINodeProperties {
         switch (schema.type) {
             case 'boolean':
                 type = 'boolean';
-                defaultValue = defaultValue !== undefined ? defaultValue : true;
+                if (defaultValue === undefined) {
+                    defaultValue = false; // Booleans need a default for the toggle
+                }
                 break;
             case 'string':
             case undefined:
                 type = 'string';
-                defaultValue = defaultValue !== undefined ? defaultValue : '';
+                // Don't set empty string as default unless there's an explicit example
                 break;
             case 'object':
                 type = 'json';
-                defaultValue = defaultValue !== undefined ? JSON.stringify(defaultValue, null, 2) : '{}';
+                if (defaultValue !== undefined) {
+                    defaultValue = JSON.stringify(defaultValue, null, 2);
+                }
                 break;
             case 'array':
                 type = 'json';
-                defaultValue = defaultValue !== undefined ? JSON.stringify(defaultValue, null, 2) : '[]';
+                if (defaultValue !== undefined) {
+                    defaultValue = JSON.stringify(defaultValue, null, 2);
+                }
                 break;
             case 'number':
             case 'integer':
                 type = 'number';
-                defaultValue = defaultValue !== undefined ? defaultValue : 0;
+                // Don't set 0 as default unless there's an explicit example
                 break;
         }
 
         const field: FromSchemaNodeProperty = {
             type: type,
-            default: defaultValue,
             description: schema.description,
+            default: defaultValue !== undefined ? defaultValue : undefined
         };
+        
         if (schema.enum && schema.enum.length > 0) {
             field.type = 'options';
             field.options = schema.enum.map((value: string) => {
@@ -87,7 +94,8 @@ export class N8NINodeProperties {
                     value: value,
                 };
             });
-            field.default = field.default ? field.default : schema.enum[0];
+            // For enums, always set a default to the first option
+            field.default = field.default !== undefined ? field.default : schema.enum[0];
         }
         return field;
     }
@@ -183,15 +191,13 @@ export class N8NINodeProperties {
                 {
                     name: 'items',
                     displayName: 'Items',
-                    values: [
-                        {
+                    values: [{
                             displayName: 'Value',
                             name: 'value',
                             type: this.getArrayItemType(itemsSchema),
                             default: this.getArrayItemDefault(itemsSchema),
                             description: itemsSchema.description || `Item value (${itemsSchema.type || 'any'})`,
-                        }
-                    ]
+                    }]
                 }
             ]
         };
@@ -219,21 +225,22 @@ export class N8NINodeProperties {
         }
     }
 
-    private getArrayItemDefault(itemsSchema: OpenAPIV3.SchemaObject): any {
+    private getArrayItemDefault(itemsSchema: OpenAPIV3.SchemaObject): INodeProperties['default'] {
         const defaultValue = this.schemaExample.extractExample(itemsSchema);
         if (defaultValue !== undefined) {
             return defaultValue;
         }
 
+        // For array items in fixedCollections, we should return undefined
+        // to let n8n handle defaults naturally
         switch (itemsSchema.type) {
             case 'boolean':
-                return false;
+                return false; // Booleans need a default
             case 'number':
             case 'integer':
-                return 0;
             case 'string':
             default:
-                return '';
+                return undefined; // No default for strings and numbers
         }
     }
 

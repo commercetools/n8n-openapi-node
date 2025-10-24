@@ -310,23 +310,79 @@ export class N8NINodeProperties {
             return [];
         }
         body = this.refResolver.resolve<OpenAPIV3.RequestBodyObject>(body)
-        const regexp = /application\/json.*/
-        const content = findKey(body.content, regexp)
+        
+        // Try to find JSON content first, then fall back to */* or other types
+        let content = findKey(body.content, /application\/json.*/);
+        let contentType = 'application/json';
+        
         if (!content) {
-            throw new Error(`No '${regexp}' content found`);
+            // Try wildcard content type
+            content = body.content?.['*/*'];
+            contentType = '*/*';
         }
+        if (!content) {
+            // Try any available content type as last resort
+            const contentTypes = Object.keys(body.content || {});
+            if (contentTypes.length > 0) {
+                content = body.content![contentTypes[0]];
+                contentType = contentTypes[0];
+            }
+        }
+        if (!content) {
+            throw new Error(`No content found in request body`);
+        }
+        
         const requestBodySchema = content.schema!!;
         const schema = this.refResolver.resolve<OpenAPIV3.SchemaObject>(requestBodySchema)
-        if (!schema.properties && schema.type != 'object' && schema.type != 'array') {
-            throw new Error(`Request body schema type '${schema.type}' not supported`);
-        }
-
+        
         const fields = [];
+        
+        // Handle simple scalar types (string, number, boolean)
+        if (!schema.properties && (schema.type === 'string' || schema.type === 'number' || schema.type === 'integer' || schema.type === 'boolean')) {
+            const fieldPropertyKeys: FromSchemaNodeProperty = this.fromSchema(schema)
+            const fieldDefaults: Partial<INodeProperties> = {
+                displayName: 'Body',
+                name: 'body',
+                required: body.required,
+                description: schema.description || 'Request body content',
+            }
+            const field = combine(fieldDefaults, fieldPropertyKeys)
+            
+            // For */* content type with string, it's likely binary/file upload
+            // Use n8n's binaryPropertyName type for proper binary handling
+            if (contentType === '*/*' && schema.type === 'string') {
+                field.type = 'string';
+                field.displayName = 'Binary Property';
+                field.default = 'data';
+                field.routing = {
+                    send: {
+                        type: 'body',
+                        property: '$value',
+                    },
+                    request: {
+                        headers: {
+                            'Content-Type': '={{ $binary[$parameter["body"]].mimeType }}',
+                        },
+                    },
+                };
+                field.description = 'Name of the binary property containing the file to upload';
+            } else {
+                field.routing = {
+                    request: {
+                        body: '={{ $value }}'
+                    },
+                };
+            }
+            fields.push(field);
+            return fields;
+        }
+        
+        // Handle array types
         if (schema.type === "array" && schema.items) {
             const innerSchema = this.refResolver.resolve<OpenAPIV3.SchemaObject>(schema.items)
             const fieldPropertyKeys: FromSchemaNodeProperty = this.fromSchemaProperty("body", innerSchema)
             const fieldDefaults: Partial<INodeProperties> = {
-                required: !!schema.required
+                required: body.required
             }
             const field = combine(fieldDefaults, fieldPropertyKeys)
             field.routing = {
@@ -335,8 +391,13 @@ export class N8NINodeProperties {
                 },
             };
             fields.push(field);
+            return fields;
         }
 
+        // Handle object types with properties
+        if (!schema.properties && schema.type !== 'object') {
+            throw new Error(`Request body schema type '${schema.type}' not supported`);
+        }
 
         const properties = schema.properties;
         for (const key in properties) {
